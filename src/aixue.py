@@ -33,8 +33,8 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from AIXueTrainer.aixue_trainer import AIXueTrainer
-from AIXueTrainer.aixue_config import AIXueConfig
+from AIXueTrainer import AIXueTrainer
+from AIXueTrainer import AIXueConfig
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     # Dataset
     ################
     # dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-    dataset = load_from_disk("/root/workspace/ppo-test/data/aixue_test_data")
+    dataset = load_from_disk(script_args.dataset_name)
     train_dataset = dataset[script_args.dataset_train_split]
     # eval_dataset = dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None
 

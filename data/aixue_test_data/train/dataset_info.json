@@ -3,15 +3,15 @@
   "citation": "",
   "config_name": "default",
   "dataset_name": "json",
-  "dataset_size": 11910,
+  "dataset_size": 24327,
   "description": "",
   "download_checksums": {
-    "/root/workspace/ppo-test/data/train.json": {
-      "num_bytes": 12452,
+    "/root/workspace/AIXueRLHF/data/scripts/../train.json": {
+      "num_bytes": 25417,
       "checksum": null
     }
   },
-  "download_size": 12452,
+  "download_size": 25417,
   "features": {
     "id": {
       "dtype": "string",
@@ -26,18 +26,18 @@
       "_type": "Value"
     },
     "reward": {
-      "dtype": "float64",
+      "dtype": "int64",
       "_type": "Value"
     }
   },
   "homepage": "",
   "license": "",
-  "size_in_bytes": 24362,
+  "size_in_bytes": 49744,
   "splits": {
     "train": {
       "name": "train",
-      "num_bytes": 11910,
-      "num_examples": 4,
+      "num_bytes": 24327,
+      "num_examples": 8,
       "dataset_name": "json"
     }
   },
