@@ -1,6 +1,5 @@
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
-
 accelerate launch --config_file configs/deepspeed_zero3.yaml \
     --main_process_port 29504 \
     src/aixue.py \
@@ -16,4 +15,5 @@ accelerate launch --config_file configs/deepspeed_zero3.yaml \
     --missing_eos_penalty 1.0 \
     --stop_token eos \
     --report_to tensorboard \
+    --save_safetensors true \
     2>&1 | tee -a /root/group-shared/jrc/ppo-test/logs/4gpu_data_test.log

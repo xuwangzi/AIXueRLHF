@@ -328,20 +328,7 @@ class AIXueTrainer(Trainer):
             yield
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
-    """
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        backup_model = self.model
-        if self.is_deepspeed_enabled:
-            backup_deepspeed = self.deepspeed
-            self.deepspeed = self.model
-
-        super().save_model(output_dir, _internal_call)
-
-        self.model = backup_model
-
-        if self.is_deepspeed_enabled:
-            self.deepspeed = backup_deepspeed
-
+    
     """
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.model
@@ -349,14 +336,8 @@ class AIXueTrainer(Trainer):
         Trainer.save_model(self, output_dir, _internal_call)
 
         self.model = backup_model
-
-    def _save(self, output_dir: Optional[str] = None, state_dict=None):
-        if self.is_deepspeed_enabled:
-            state_dict = {name.removeprefix('policy.'): param for name, param in state_dict.items()
-                        if name.startswith('policy.')}
-
-        super()._save(output_dir, state_dict)
-
+    """
+    
     def train(self):
         args = self.args
         accelerator = self.accelerator
