@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "yzhang.markdown-all-in-one",
+        "ms-vscode.vscode-markdown",
+        "bierner.markdown-mermaid",
+        "ms-vscode.vscode-json",
+        "ms-python.python"
+    ]
+} 
