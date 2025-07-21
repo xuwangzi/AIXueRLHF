@@ -16,4 +16,5 @@ accelerate launch --config_file configs/deepspeed_zero3.yaml \
     --stop_token eos \
     --report_to tensorboard \
     --save_safetensors true \
+    --attn_implementation flash_attention_2 \
     2>&1 | tee -a /root/group-shared/jrc/ppo-test/logs/4gpu_data_test.log

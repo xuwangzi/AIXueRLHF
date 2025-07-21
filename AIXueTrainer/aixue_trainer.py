@@ -17,8 +17,6 @@ import math
 import os
 import textwrap
 import time
-from collections import defaultdict
-from contextlib import contextmanager, nullcontext
 from typing import Optional, Union
 
 import numpy as np
@@ -26,7 +24,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import broadcast
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -38,66 +36,33 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
-    is_wandb_available,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils import is_peft_available
 
 from trl.core import masked_mean, masked_whiten
 from trl.models import create_reference_model
-from trl.models.utils import unwrap_model_for_generation
 from trl.trainer.utils import (
     OnlineTrainerState,
-    batch_generation,
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
     forward,
-    generate_model_card,
-    get_comet_experiment_url,
-    get_reward,
-    log_table_to_comet_experiment,
-    peft_module_casting_to_bf16,
     prepare_deepspeed,
-    print_rich_table,
     selective_log_softmax,
     truncate_response,
 )
 
 from AIXueTrainer.aixue_config import AIXueConfig
 
-if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
-
-if is_wandb_available():
-    import wandb
-
-
 INVALID_LOGPROB = 1.0
 
-
-# taken from https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/ppo/ppo_trainer.py#L29
-# we did this we can do a single `model = accelerator.prepare(model)`
-class PolicyAndValueWrapper(nn.Module):
-    def __init__(self, policy, value_model) -> None:
-        super().__init__()
-        self.policy = policy
-        self.value_model = value_model
-        self.critic_backbone = getattr(value_model, value_model.base_model_prefix) # why?
-
-    def forward(self, **kwargs):
-        output = self.critic_backbone(**kwargs)
-        logits = self.value_model.score(output.hidden_states[-1])
-        return self.policy(**kwargs), logits
-
-class NestedListDataCollator:
+class PromptResponseDataCollator:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
         
     def __call__(self, batch):
-        # 如果input_ids是嵌套list，需要特殊处理
         max_seq_length = max(len(item["input_ids"]) for item in batch)
         
         padded_input_ids_batch = []
@@ -130,16 +95,15 @@ class AIXueTrainer(Trainer):
         model: nn.Module,
         ref_model: Optional[nn.Module],
         train_dataset: Dataset,
-        data_collator: Optional[NestedListDataCollator] = None, # padding
+        data_collator: Optional[PromptResponseDataCollator] = None, # padding
         # less commonly used
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[list[TrainerCallback]] = None, # 根据Trainer状态进行控制
-        peft_config: Optional["PeftConfig"] = None,
     ) -> None:
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
-                "same as `model`, you must make a copy of it, or `None` if you use peft."
+                "same as `model`, you must make a copy of it."
             )
 
         self.args = args
@@ -148,7 +112,7 @@ class AIXueTrainer(Trainer):
 
         # Define the collator if not provided
         if data_collator is None:
-            data_collator = NestedListDataCollator(self.processing_class)
+            data_collator = PromptResponseDataCollator(self.processing_class)
 
         # Handle stop token settings: update policy model's generation_config to use provided stop token
         if args.stop_token and args.stop_token_id:
@@ -171,29 +135,9 @@ class AIXueTrainer(Trainer):
                 "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
             )
 
-        # peft support
-        if not is_peft_available() and peft_config is not None:
-            raise ImportError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_confg, we merge and unload it first
-            if isinstance(self.policy_model, PeftModel):
-                self.policy_model = self.policy_model.merge_and_unload()
-
-            # get peft model with the given config
-            self.policy_model = get_peft_model(self.policy_model, peft_config)
-            if args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
-                peft_module_casting_to_bf16(self.policy_model)
-
-        self.is_peft_model = is_peft_available() and isinstance(self.policy_model, PeftModel)
-        self.model_adapter_name = args.model_adapter_name
-        self.ref_adapter_name = args.ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model:
-            self.ref_model = None
         else:
             self.ref_model = create_reference_model(self.policy_model)
 
@@ -269,16 +213,12 @@ class AIXueTrainer(Trainer):
         self.hp_search_backend = None # 超参数搜索
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
-        # Create distant repo and output directory if needed
-        self.hub_model_id = None
-        if self.args.push_to_hub:
-            self.init_hf_repo()
         if self.args.should_save:
             os.makedirs(self.args.output_dir, exist_ok=True)
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names) # [trl,ppo]
+            self.model.add_model_tags(self._tag_names) # [trl,aixue]
 
         #########
         ### setup dataloader
@@ -299,45 +239,20 @@ class AIXueTrainer(Trainer):
 
         if self.is_deepspeed_enabled:
             if self.ref_model is None:
-                if not self.is_peft_model:
-                    raise ValueError("No reference model and model is not a Peft model.")
+                raise ValueError("No reference model.")
             else:
                 self.ref_model = prepare_deepspeed(
                     self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
         else:
             if self.ref_model is None:
-                if not self.is_peft_model:
-                    raise ValueError("No reference model and model is not a Peft model.")
+                raise ValueError("No reference model.")
             else:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
 
-    @contextmanager
-    def null_ref_context(self):
-        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        with (
-            self.accelerator.model.disable_adapter()
-            if self.is_peft_model and not self.ref_adapter_name
-            else nullcontext()
-        ):
-            if self.ref_adapter_name:
-                self.model.set_adapter(self.ref_adapter_name)
-            yield
-            if self.ref_adapter_name:
-                self.model.set_adapter(self.model_adapter_name or "default")
-    
-    """
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        backup_model = self.model
-
-        Trainer.save_model(self, output_dir, _internal_call)
-
-        self.model = backup_model
-    """
-    
     def train(self):
         args = self.args
         accelerator = self.accelerator
@@ -407,12 +322,7 @@ class AIXueTrainer(Trainer):
                     logits = output.logits[:, context_length - 1 : -1]
                     logits /= args.temperature + 1e-7
                     logprob = selective_log_softmax(logits, response) # logprob [l_r_f_B, R]
-
-                    if ref_policy is None: # peft
-                        with self.null_ref_context():
-                            ref_output = forward(model.policy, query_response, processing_class.pad_token_id)
-                    else:
-                        ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
+                    ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
                     ref_logprob = selective_log_softmax(ref_logits, response)
@@ -582,11 +492,6 @@ class AIXueTrainer(Trainer):
             torch.cuda.empty_cache()
             gc.collect()
             
-            """
-            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
-                self.generate_completions(sampling=True)
-                torch.cuda.empty_cache()
-            """
             del (
                 query_responses,
                 responses,
@@ -612,59 +517,4 @@ class AIXueTrainer(Trainer):
         if self.control.should_save:
             self._save_checkpoint(model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
-
-        citation = textwrap.dedent("""\
-        @article{mziegler2019fine-tuning,
-            title        = {{Fine-Tuning Language Models from Human Preferences}},
-            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
-            year         = 2019,
-            eprint       = {arXiv:1909.08593}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="PPO",
-            trainer_citation=citation,
-            paper_title="Fine-Tuning Language Models from Human Preferences",
-            paper_id="1909.08593",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
+            
