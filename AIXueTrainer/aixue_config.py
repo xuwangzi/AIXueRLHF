@@ -19,8 +19,8 @@ class AIXueConfig(OnPolicyConfig):
             Name of this experiment.
         # reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
         #    Path to the reward model.
-        value_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
-            Path to the value model.
+        # value_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+        #    Path to the value model.
         model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
