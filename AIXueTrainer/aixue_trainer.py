@@ -30,7 +30,6 @@ from torch.utils.data import DataLoader
 from transformers import (
     BaseImageProcessor,
     FeatureExtractionMixin,
-    GenerationConfig,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
@@ -158,18 +157,6 @@ class AIXueTrainer(Trainer):
         args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = exact_div(
-            args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
-        )
-        args.local_mini_batch_size = exact_div(
-            args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
-        )
-        if args.whiten_rewards:
-            assert args.local_mini_batch_size >= 8, (
-                f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
-            )
-        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
-        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_total_batches = math.ceil(
             args.total_episodes / args.batch_size
         )  # we may train for more than `total_episodes`
@@ -271,7 +258,7 @@ class AIXueTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_ppo_epochs, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -396,65 +383,60 @@ class AIXueTrainer(Trainer):
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size)
-                minibatch_idx = 0
-                for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size
-                    mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
-                    gradient_accumulation_idx = 0 # num_mini_batches=1 才保证梯度累积步数正确？
-                    for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
-                        with accelerator.accumulate(model):
-                            micro_batch_end = micro_batch_start + args.per_device_train_batch_size
-                            micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                            mb_advantage = advantages[micro_batch_inds]
-                            mb_responses = responses[micro_batch_inds]
-                            mb_query_responses = query_responses[micro_batch_inds]
-                            mb_logprobs = logprobs[micro_batch_inds, :]
-                            mb_return = returns[micro_batch_inds]
+                gradient_accumulation_idx = 0
+                for micro_batch_start in range(0, args.local_batch_size, args.per_device_train_batch_size):
+                    with accelerator.accumulate(model):
+                        micro_batch_end = micro_batch_start + args.per_device_train_batch_size
+                        micro_batch_inds = b_inds[micro_batch_start:micro_batch_end]
+                        mb_advantage = advantages[micro_batch_inds]
+                        mb_responses = responses[micro_batch_inds]
+                        mb_query_responses = query_responses[micro_batch_inds]
+                        mb_logprobs = logprobs[micro_batch_inds, :]
+                        mb_return = returns[micro_batch_inds]
 
-                            output = forward(model, mb_query_responses, processing_class.pad_token_id)
-                            logits = output.logits[:, context_length - 1 : -1] # [mirco_B, R, V]
-                            logits /= args.temperature + 1e-7
-                            new_logprobs = selective_log_softmax(logits, mb_responses) # [mirco_B, R]
-                            new_logprobs = torch.masked_fill(
-                                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+                        output = forward(model, mb_query_responses, processing_class.pad_token_id)
+                        logits = output.logits[:, context_length - 1 : -1] # [mirco_B, R, V]
+                        logits /= args.temperature + 1e-7
+                        new_logprobs = selective_log_softmax(logits, mb_responses) # [mirco_B, R]
+                        new_logprobs = torch.masked_fill(
+                            new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+                        )
+                        logprobs_diff = new_logprobs - mb_logprobs
+                        ratio = torch.exp(logprobs_diff)
+                        pg_losses = -mb_advantage * ratio
+                        pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+                        pg_loss_max = torch.max(pg_losses, pg_losses2)
+                        pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
+                        loss = pg_loss 
+                        accelerator.backward(loss)
+                        optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
+                        optimizer.zero_grad() 
+
+                        with torch.no_grad():
+                            pg_clipfrac = masked_mean(
+                                (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
                             )
-                            logprobs_diff = new_logprobs - mb_logprobs
-                            ratio = torch.exp(logprobs_diff)
-                            pg_losses = -mb_advantage * ratio
-                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
-                            pg_loss_max = torch.max(pg_losses, pg_losses2)
-                            pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
-                            loss = pg_loss 
-                            accelerator.backward(loss)
-                            optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
-                            optimizer.zero_grad() 
-
-                            with torch.no_grad():
-                                pg_clipfrac = masked_mean(
-                                    (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
-                                )
-                                prob_dist = torch.nn.functional.softmax(logits, dim=-1) # micro_batch token distribution
-                                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1) # micro_batch entropy
-                                approxkl = 0.5 * (logprobs_diff**2).mean() # micro_batch KL MSE
-                                approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    pg_clipfrac
-                                )
-                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
-                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
-                        gradient_accumulation_idx += 1
-                    minibatch_idx += 1
-                    # del everything and empty cache
-                    # fmt: off
-                    del (
-                        output, logits, new_logprobs, 
-                        logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
-                        pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
-                        mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
-                    )
-                    # fmt: on
-                    torch.cuda.empty_cache()
+                            prob_dist = torch.nn.functional.softmax(logits, dim=-1) # micro_batch token distribution
+                            entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1) # micro_batch entropy
+                            approxkl = 0.5 * (logprobs_diff**2).mean() # micro_batch KL MSE
+                            approxkl_stats[ppo_epoch_idx, gradient_accumulation_idx] = approxkl
+                            pg_clipfrac_stats[ppo_epoch_idx, gradient_accumulation_idx] = (
+                                pg_clipfrac
+                            )
+                            pg_loss_stats[ppo_epoch_idx, gradient_accumulation_idx] = pg_loss
+                            entropy_stats[ppo_epoch_idx, gradient_accumulation_idx] = entropy.mean()
+                            ratio_stats[ppo_epoch_idx, gradient_accumulation_idx] = ratio.mean()
+                    gradient_accumulation_idx += 1
+                # del everything and empty cache
+                # fmt: off
+                del (
+                    output, logits, new_logprobs, 
+                    logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
+                    pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
+                    mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
+                )
+                # fmt: on
+                torch.cuda.empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
