@@ -79,7 +79,6 @@ if __name__ == "__main__":
         """pre-tokenize the dataset before training; only collate during training"""
 
         def tokenize(element):
-            print(element)
             messages = [
                 {"role": "user", "content": element["prompt"]}
             ]
@@ -93,7 +92,6 @@ if __name__ == "__main__":
                 text,
                 padding=False,
             )
-            print(text)
             messages = [
                 {"role": "assistant", "content": element["response"]}
             ]
@@ -107,7 +105,6 @@ if __name__ == "__main__":
                 text,
                 padding=False,
             )
-            print(text)
             reward = (element["reward"])
             return {"input_ids": input_ids, "response_ids": response_ids, "reward": reward, "lengths": len(input_ids)}
 

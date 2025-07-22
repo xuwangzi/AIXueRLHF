@@ -83,7 +83,7 @@ class PromptResponseDataCollator:
         }
 
 class AIXueTrainer(Trainer):
-    _tag_names = ["trl", "ppo"]
+    _tag_names = ["trl", "aixue"]
 
     def __init__(
         self,

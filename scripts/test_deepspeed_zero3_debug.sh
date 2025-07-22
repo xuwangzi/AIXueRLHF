@@ -7,8 +7,8 @@ accelerate launch --config_file configs/deepspeed_zero3.yaml \
     --output_dir /root/group-shared/jrc/ppo-test/models/4gpu_aixue_data_test \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 2 \
-    --gradient_accumulation_steps 1 \
-    --total_episodes 8 \
+    --gradient_accumulation_steps 4 \
+    --total_episodes 960 \
     --model_name_or_path /root/group-shared/jrc/base-models/Qwen3-32B \
     --sft_model_path /root/group-shared/jrc/base-models/Qwen3-32B \
     --local_rollout_forward_batch_size 2 \

@@ -3,15 +3,15 @@
   "citation": "",
   "config_name": "default",
   "dataset_name": "json",
-  "dataset_size": 24327,
+  "dataset_size": 1459620,
   "description": "",
   "download_checksums": {
     "/root/workspace/AIXueRLHF/data/scripts/../train.json": {
-      "num_bytes": 25417,
+      "num_bytes": 1524902,
       "checksum": null
     }
   },
-  "download_size": 25417,
+  "download_size": 1524902,
   "features": {
     "id": {
       "dtype": "string",
@@ -32,12 +32,12 @@
   },
   "homepage": "",
   "license": "",
-  "size_in_bytes": 49744,
+  "size_in_bytes": 2984522,
   "splits": {
     "train": {
       "name": "train",
-      "num_bytes": 24327,
-      "num_examples": 8,
+      "num_bytes": 1459620,
+      "num_examples": 480,
       "dataset_name": "json"
     }
   },
