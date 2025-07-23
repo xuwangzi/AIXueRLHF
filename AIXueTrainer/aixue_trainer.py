@@ -15,7 +15,6 @@
 import gc
 import math
 import os
-import textwrap
 import time
 from typing import Optional, Union
 
@@ -41,17 +40,22 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
 from trl.core import masked_mean, masked_whiten
+from trl.import_utils import is_liger_kernel_available
 from trl.models import create_reference_model
 from trl.trainer.utils import (
     OnlineTrainerState,
     disable_dropout_in_model,
-    exact_div,
     first_true_indices,
     forward,
     prepare_deepspeed,
     selective_log_softmax,
     truncate_response,
 )
+
+import deepspeed
+
+if is_liger_kernel_available():
+    from AIXueTrainer.aixue_loss import LigerFusedLinearAIXueLoss
 
 from AIXueTrainer.aixue_config import AIXueConfig
 
@@ -236,6 +240,15 @@ class AIXueTrainer(Trainer):
                 raise ValueError("No reference model.")
             else:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
+        
+        #########
+        ### setup loss
+        #########
+        if self.args.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ImportError("Liger is required to use `liger_loss` as the AIXue loss. Run `pip install liger-kernel`.")
+            self.liger_aixue_loss = LigerFusedLinearAIXueLoss(
+            )
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
@@ -395,44 +408,91 @@ class AIXueTrainer(Trainer):
                         mb_return = returns[micro_batch_inds]
 
                         output = forward(model, mb_query_responses, processing_class.pad_token_id)
-                        logits = output.logits[:, context_length - 1 : -1] # [mirco_B, R, V]
-                        logits /= args.temperature + 1e-7
-                        new_logprobs = selective_log_softmax(logits, mb_responses) # [mirco_B, R]
-                        new_logprobs = torch.masked_fill(
-                            new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
-                        )
-                        logprobs_diff = new_logprobs - mb_logprobs
-                        ratio = torch.exp(logprobs_diff)
-                        pg_losses = -mb_advantage * ratio
-                        pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
-                        pg_loss_max = torch.max(pg_losses, pg_losses2)
-                        pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
-                        loss = pg_loss 
-                        accelerator.backward(loss)
-                        optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
-                        optimizer.zero_grad() 
+                        if self.args.use_liger_loss:
+                            last_hidden_state = output.hidden_states[-1][:, context_length - 1 : -1, :]
+                            unwrapped_model = self.accelerator.unwrap_model(model)
+                            if self.is_deepspeed_enabled:
+                                with deepspeed.zero.GatheredParameters(unwrapped_model.lm_head.weight):
+                                    loss, temp_metrics = self.liger_aixue_loss(
+                                        _input=last_hidden_state,
+                                        lin_weight=unwrapped_model.lm_head.weight,
+                                        selected_token_ids=mb_responses,
+                                        attention_mask=~padding_mask[micro_batch_inds,:],
+                                        advantages=mb_advantage,
+                                        bias=unwrapped_model.lm_head.bias,
+                                        ref_per_token_logps=None,
+                                        old_per_token_logps=mb_logprobs,
+                                    )
+                                    accelerator.backward(loss)
+                            else:
+                                loss, temp_metrics = self.liger_aixue_loss(
+                                    _input=last_hidden_state,
+                                    lin_weight=unwrapped_model.lm_head.weight,
+                                    selected_token_ids=mb_responses,
+                                    attention_mask=~padding_mask[micro_batch_inds,:],
+                                    advantages=mb_advantage,
+                                    bias=unwrapped_model.lm_head.bias,
+                                    ref_per_token_logps=None,
+                                    old_per_token_logps=mb_logprobs,
+                                )
+                                accelerator.backward(loss)
+                            
+                            optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
+                            optimizer.zero_grad() 
 
-                        with torch.no_grad():
-                            pg_clipfrac = masked_mean(
-                                (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
+                            with torch.no_grad():
+                                pg_clipfrac = temp_metrics[0]
+                                prob_dist = torch.nn.functional.softmax(logits, dim=-1) # micro_batch token distribution
+                                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1) # micro_batch entropy
+                                approxkl = temp_metrics[3]
+                                approxkl_stats[ppo_epoch_idx, gradient_accumulation_idx] = approxkl
+                                pg_clipfrac_stats[ppo_epoch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
+                                pg_loss_stats[ppo_epoch_idx, gradient_accumulation_idx] = temp_metrics[1]
+                                entropy_stats[ppo_epoch_idx, gradient_accumulation_idx] = entropy.mean()
+                                ratio = temp_metrics[2]
+                                ratio_stats[ppo_epoch_idx, gradient_accumulation_idx] = ratio.mean()
+                        else:
+                            logits = output.logits[:, context_length - 1 : -1] # [mirco_B, R, V]
+                            logits /= args.temperature + 1e-7
+                            new_logprobs = selective_log_softmax(logits, mb_responses) # [mirco_B, R]
+                            new_logprobs = torch.masked_fill(
+                                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
-                            prob_dist = torch.nn.functional.softmax(logits, dim=-1) # micro_batch token distribution
-                            entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1) # micro_batch entropy
-                            approxkl = 0.5 * (logprobs_diff**2).mean() # micro_batch KL MSE
-                            approxkl_stats[ppo_epoch_idx, gradient_accumulation_idx] = approxkl
-                            pg_clipfrac_stats[ppo_epoch_idx, gradient_accumulation_idx] = (
-                                pg_clipfrac
-                            )
-                            pg_loss_stats[ppo_epoch_idx, gradient_accumulation_idx] = pg_loss
-                            entropy_stats[ppo_epoch_idx, gradient_accumulation_idx] = entropy.mean()
-                            ratio_stats[ppo_epoch_idx, gradient_accumulation_idx] = ratio.mean()
+                            logprobs_diff = new_logprobs - mb_logprobs
+                            ratio = torch.exp(logprobs_diff)
+                            pg_losses = -mb_advantage * ratio
+                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+                            pg_loss_max = torch.max(pg_losses, pg_losses2)
+                            pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
+                            loss = pg_loss 
+                            accelerator.backward(loss)
+                            optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
+                            optimizer.zero_grad() 
+
+                            with torch.no_grad():
+                                pg_clipfrac = masked_mean(
+                                    (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
+                                )
+                                prob_dist = torch.nn.functional.softmax(logits, dim=-1) # micro_batch token distribution
+                                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1) # micro_batch entropy
+                                approxkl = 0.5 * (logprobs_diff**2).mean() # micro_batch KL MSE
+                                approxkl_stats[ppo_epoch_idx, gradient_accumulation_idx] = approxkl
+                                pg_clipfrac_stats[ppo_epoch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
+                                pg_loss_stats[ppo_epoch_idx, gradient_accumulation_idx] = pg_loss
+                                entropy_stats[ppo_epoch_idx, gradient_accumulation_idx] = entropy.mean()
+                                ratio_stats[ppo_epoch_idx, gradient_accumulation_idx] = ratio.mean()
+                            del (logprobs_diff, logits, new_logprobs, pg_losses, pg_losses2, pg_loss_max, pg_loss)
                     gradient_accumulation_idx += 1
                 # del everything and empty cache
                 # fmt: off
                 del (
-                    output, logits, new_logprobs, 
-                    logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
-                    pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
+                    output, 
+                    ratio, 
+                    loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                     mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
                 )
                 # fmt: on

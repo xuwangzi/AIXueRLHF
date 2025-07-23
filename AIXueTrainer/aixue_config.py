@@ -52,6 +52,8 @@ class AIXueConfig(OnPolicyConfig):
             capacity of a single GPU, albeit at the cost of slower generation.
         whiten_advantages (`bool`, *optional*, defaults to `False`):
             Whether to whiten the advantages.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use the Liger AIXue loss.
     """
 
     exp_name: str = field(
@@ -133,4 +135,8 @@ class AIXueConfig(OnPolicyConfig):
     whiten_advantages: bool = field(
         default=False,
         metadata={"help": "Whether to whiten the advantages."},
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use the Liger AIXue loss."},
     )
