@@ -53,6 +53,7 @@ from trl.trainer.utils import (
 )
 
 import deepspeed
+from tqdm import tqdm
 
 if is_liger_kernel_available():
     from AIXueTrainer.aixue_loss import LigerFusedLinearAIXueLoss
@@ -70,7 +71,7 @@ class PromptResponseDataCollator:
         
         padded_input_ids_batch = []
         for item in batch:
-            padded_seq = item["input_ids"] + [self.tokenizer.pad_token_id] * (max_seq_length - len(item["input_ids"]))
+            padded_seq = [self.tokenizer.pad_token_id] * (max_seq_length - len(item["input_ids"])) + item["input_ids"]
             padded_input_ids_batch.append(padded_seq)
         
         max_seq_length = max(len(item["response_ids"]) for item in batch)
@@ -248,6 +249,10 @@ class AIXueTrainer(Trainer):
             if not is_liger_kernel_available():
                 raise ImportError("Liger is required to use `liger_loss` as the AIXue loss. Run `pip install liger-kernel`.")
             self.liger_aixue_loss = LigerFusedLinearAIXueLoss(
+                beta=0.0,
+                epsilon_low=self.args.cliprange,
+                epsilon_high=self.args.cliprange,
+                temperature=self.args.temperature + 1e-7,
             )
 
     def get_train_dataloader(self) -> DataLoader:
@@ -315,7 +320,7 @@ class AIXueTrainer(Trainer):
                 ref_logprobs = []
                 scores = data["reward"].to(device)
                 sequence_lengths = []
-                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                for i in tqdm(range(0, queries.shape[0], args.local_rollout_forward_batch_size), desc="rollout rank["+str(accelerator.process_index)+"]"):
                     response = responses[i : i + args.local_rollout_forward_batch_size]
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     output = forward(model, query_response, processing_class.pad_token_id)
@@ -394,10 +399,10 @@ class AIXueTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(args.num_ppo_epochs):
+            for ppo_epoch_idx in tqdm(range(args.num_ppo_epochs), desc="ppo_epoch rank["+str(accelerator.process_index)+"]"):
                 b_inds = np.random.permutation(args.local_batch_size)
                 gradient_accumulation_idx = 0
-                for micro_batch_start in range(0, args.local_batch_size, args.per_device_train_batch_size):
+                for micro_batch_start in tqdm(range(0, args.local_batch_size, args.per_device_train_batch_size), desc="gradient_accumulation rank["+str(accelerator.process_index)+"]"):
                     with accelerator.accumulate(model):
                         micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                         micro_batch_inds = b_inds[micro_batch_start:micro_batch_end]
@@ -436,10 +441,8 @@ class AIXueTrainer(Trainer):
                                     old_per_token_logps=mb_logprobs,
                                 )
                                 accelerator.backward(loss)
-                            
-                            optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
-                            optimizer.zero_grad() 
-
+                            optimizer.step()
+                            optimizer.zero_grad()                         
                             with torch.no_grad():
                                 pg_clipfrac = temp_metrics[0]
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1) # micro_batch token distribution
@@ -468,9 +471,8 @@ class AIXueTrainer(Trainer):
                             pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
                             loss = pg_loss 
                             accelerator.backward(loss)
-                            optimizer.step() # 没有梯度累积？ with accelerator.accumulate(model) 保证了只在每gradient_accumulation_steps步执行一次
-                            optimizer.zero_grad() 
-
+                            optimizer.step()
+                            optimizer.zero_grad()
                             with torch.no_grad():
                                 pg_clipfrac = masked_mean(
                                     (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
@@ -487,17 +489,18 @@ class AIXueTrainer(Trainer):
                                 ratio_stats[ppo_epoch_idx, gradient_accumulation_idx] = ratio.mean()
                             del (logprobs_diff, logits, new_logprobs, pg_losses, pg_losses2, pg_loss_max, pg_loss)
                     gradient_accumulation_idx += 1
+                        
                 # del everything and empty cache
                 # fmt: off
                 del (
-                    output, 
-                    ratio, 
-                    loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
+                    output, ratio, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                     mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
                 )
                 # fmt: on
                 torch.cuda.empty_cache()
             with torch.no_grad():
+                print(f"approxkl_stats: {approxkl_stats}")
+                print(f"ratio_stats: {ratio_stats}")
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()

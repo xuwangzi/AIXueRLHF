@@ -4,6 +4,8 @@ import torch
 
 from liger_kernel.chunked_loss.fused_linear_ppo import LigerFusedLinearPPOBase
 
+INVALID_LOGPROB = 1.0
+
 def k3_loss_fn(log_p, log_q):
     # computes k3 estimate of KL[q, p]
     # ref: http://joschu.net/blog/kl-approx.html
@@ -31,14 +33,17 @@ class LigerFusedLinearAIXueFunction(LigerFusedLinearPPOBase):
         **kwargs,
     ):
         """AIXue Loss Function matching AIXueTrainer implementation."""
-        per_token_logps = log_probs.gather(dim=-1, index=selected_token_ids.unsqueeze(-1)).squeeze(
-            -1
-        )  # (batch_size, seq_len)
-
+        per_token_logps = torch.masked_fill(
+            log_probs, ~attention_mask, INVALID_LOGPROB
+        )
         # Compute policy gradient loss with importance sampling ratio
         old_per_token_logps = old_per_token_logps if old_per_token_logps is not None else per_token_logps.detach()
         logprobs_diff = per_token_logps - old_per_token_logps
+        # print(f"logprobs_diff: {logprobs_diff}")
+        # print(f"approxkl: {0.5 * (logprobs_diff**2).mean()}")
         coef_1 = torch.exp(logprobs_diff)
+        # print(f"coef_1: {coef_1}")
+        # print(f"ratio: {coef_1.mean()}")
         coef_2 = clip_coef_fn(coef_1, epsilon_low, epsilon_high)
         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
@@ -55,8 +60,8 @@ class LigerFusedLinearAIXueFunction(LigerFusedLinearPPOBase):
         )
         metrics.append((is_clipped * attention_mask).sum() / torch.clamp(full_attention_mask.sum(), min=1.0)) # pg_clipfrac
         metrics.append(loss) # pg_loss
-        metrics.append(coef_1.mean()) # ratio
-        metrics.append(0.5 * (logprobs_diff**2).mean()) # approxkl
+        metrics.append(coef_1.mean() / full_attention_mask.shape[0]) # ratio
+        metrics.append(0.5 * (logprobs_diff**2).mean() / full_attention_mask.shape[0]) # approxkl
         return loss, metrics
 
     @classmethod
