@@ -498,6 +498,8 @@ class AIXueTrainer(Trainer):
                 )
                 # fmt: on
                 torch.cuda.empty_cache()
+
+                self.save_model(self.args.output_dir+f"/checkpoint-{update}-{ppo_epoch_idx}")
             with torch.no_grad():
                 print(f"approxkl_stats: {approxkl_stats}")
                 print(f"ratio_stats: {ratio_stats}")

@@ -1,0 +1,6 @@
+{"time":"2025-08-01T02:04:57.754075059-07:00","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-08-01T02:04:57.956441088-07:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": proxyconnect tcp: EOF"}
+{"time":"2025-08-01T02:05:00.2291798-07:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": proxyconnect tcp: EOF"}
+{"time":"2025-08-01T02:05:05.12845299-07:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": proxyconnect tcp: EOF"}
+{"time":"2025-08-01T02:05:15.123589738-07:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": proxyconnect tcp: EOF"}
+{"time":"2025-08-01T02:05:31.744453494-07:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/graphql\": proxyconnect tcp: EOF"}

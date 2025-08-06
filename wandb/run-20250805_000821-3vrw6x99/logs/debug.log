@@ -1,0 +1,92 @@
+2025-08-05 00:08:21,774 INFO    MainThread:1273883 [wandb_setup.py:_flush():80] Current SDK version is 0.21.0
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_setup.py:_flush():80] Configure stats pid to 1273883
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_setup.py:_flush():80] Loading settings from /root/.config/wandb/settings
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_setup.py:_flush():80] Loading settings from /root/workspace/AIXueRLHF/wandb/settings
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_setup.py:_flush():80] Loading settings from environment variables
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_init.py:setup_run_log_directory():703] Logging user logs to /root/workspace/AIXueRLHF/wandb/run-20250805_000821-3vrw6x99/logs/debug.log
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_init.py:setup_run_log_directory():704] Logging internal logs to /root/workspace/AIXueRLHF/wandb/run-20250805_000821-3vrw6x99/logs/debug-internal.log
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_init.py:init():830] calling init triggers
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_init.py:init():835] wandb.init called with sweep_config: {}
+config: {'_wandb': {}}
+2025-08-05 00:08:21,775 INFO    MainThread:1273883 [wandb_init.py:init():871] starting backend
+2025-08-05 00:08:21,986 INFO    MainThread:1273883 [wandb_init.py:init():874] sending inform_init request
+2025-08-05 00:08:21,989 INFO    MainThread:1273883 [wandb_init.py:init():882] backend started and connected
+2025-08-05 00:08:21,991 INFO    MainThread:1273883 [wandb_init.py:init():953] updated telemetry
+2025-08-05 00:08:22,000 INFO    MainThread:1273883 [wandb_init.py:init():977] communicating run to backend with 90.0 second timeout
+2025-08-05 00:08:53,041 INFO    Thread-3 (wrapped_target):1273883 [retry.py:__call__():173] [no run ID] Retry attempt failed:
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connection.py", line 198, in _new_conn
+    sock = connection.create_connection(
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+TimeoutError: timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connectionpool.py", line 488, in _make_request
+    raise new_e
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connectionpool.py", line 1093, in _validate_conn
+    conn.connect()
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connection.py", line 753, in connect
+    self.sock = sock = self._new_conn()
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connection.py", line 207, in _new_conn
+    raise ConnectTimeoutError(
+urllib3.exceptions.ConnectTimeoutError: (<urllib3.connection.HTTPSConnection object at 0x7f49d5a00c40>, 'Connection to api.wandb.ai timed out. (connect timeout=20)')
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/requests/adapters.py", line 667, in send
+    resp = conn.urlopen(
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f49d5a00c40>, 'Connection to api.wandb.ai timed out. (connect timeout=20)'))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 134, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 397, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 58, in execute
+    request = self.session.post(self.url, **post_args)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/requests/sessions.py", line 637, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/requests/adapters.py", line 688, in send
+    raise ConnectTimeout(e, request=request)
+requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7f49d5a00c40>, 'Connection to api.wandb.ai timed out. (connect timeout=20)'))
+2025-08-05 00:09:29,503 WARNING MainThread:1273883 [wandb_init.py:init():1610] [no run ID] interrupted
+Traceback (most recent call last):
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/wandb_init.py", line 1606, in init
+    return wi.init(run_settings, run_config, run_printer)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/wandb_init.py", line 996, in init
+    result = wait_with_progress(
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/mailbox/wait_with_progress.py", line 24, in wait_with_progress
+    return wait_all_with_progress(
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/mailbox/wait_with_progress.py", line 87, in wait_all_with_progress
+    return asyncio_compat.run(progress_loop_with_timeout)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/site-packages/wandb/sdk/lib/asyncio_compat.py", line 30, in run
+    return future.result()
+  File "/root/anaconda3/envs/aixue/lib/python3.10/concurrent/futures/_base.py", line 453, in result
+    self._condition.wait(timeout)
+  File "/root/anaconda3/envs/aixue/lib/python3.10/threading.py", line 320, in wait
+    waiter.acquire()
+KeyboardInterrupt

@@ -92,15 +92,7 @@ if __name__ == "__main__":
                 text,
                 padding=False,
             )
-            messages = [
-                {"role": "assistant", "content": element["response"]}
-            ]
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False # Switches between thinking and non-thinking modes. Default is True.
-            )
+            text = element["response"] + "<|im_end|>"
             response_ids = tokenizer.encode(
                 text,
                 padding=False,
@@ -132,4 +124,4 @@ if __name__ == "__main__":
     trainer.train()
 
     # Save
-    trainer.save_model(training_args.output_dir)
+    # trainer.save_model(training_args.output_dir)
