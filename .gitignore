@@ -1,0 +1,5 @@
+/.vscode/
+/AIXueTrainer/__pycache__/
+/data/*
+!/data/train.json
+/wandb/
