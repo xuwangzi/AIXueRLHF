@@ -36,44 +36,6 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 from AIXueTrainer import AIXueTrainer
 from AIXueTrainer import AIXueConfig
 
-"""
-python examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
-    --dataset_test_split validation \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo_tldr \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --total_episodes 30000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --missing_eos_penalty 1.0 \
-    --stop_token eos \
-    --response_length 53 \
-    --eval_strategy steps \
-    --eval_steps 100
-
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
-    --dataset_test_split validation \
-    --output_dir models/minimal/ppo_tldr \
-    --learning_rate 3e-6 \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 4 \
-    --total_episodes 1000000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 16 \
-    --missing_eos_penalty 1.0 \
-    --stop_token eos \
-    --eval_strategy steps \
-    --eval_steps 100
-"""
-
-
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, AIXueConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
@@ -94,44 +56,29 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
-    # value_model = AutoModelForSequenceClassification.from_pretrained(
-    #     training_args.value_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
-    # )
-    # reward_model = AutoModelForSequenceClassification.from_pretrained(
-    #     training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
-    # )
     policy = AutoModelForCausalLM.from_pretrained(
         training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
     )
-
-    peft_config = get_peft_config(model_args)
-    if peft_config is None:
-        ref_policy = AutoModelForCausalLM.from_pretrained(
-            training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
-        )
-    else:
-        ref_policy = None
+    ref_policy = AutoModelForCausalLM.from_pretrained(
+        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
+    )
 
     ################
     # Dataset
     ################
-    # dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
     dataset = load_from_disk(script_args.dataset_name)
     train_dataset = dataset[script_args.dataset_train_split]
-    # eval_dataset = dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
 
         def tokenize(element):
-            print(element)
             messages = [
                 {"role": "user", "content": element["prompt"]}
             ]
@@ -145,21 +92,11 @@ if __name__ == "__main__":
                 text,
                 padding=False,
             )
-            print(text)
-            messages = [
-                {"role": "assistant", "content": element["response"]}
-            ]
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False # Switches between thinking and non-thinking modes. Default is True.
-            )
+            text = element["response"] + "<|im_end|>"
             response_ids = tokenizer.encode(
                 text,
                 padding=False,
             )
-            print(text)
             reward = (element["reward"])
             return {"input_ids": input_ids, "response_ids": response_ids, "reward": reward, "lengths": len(input_ids)}
 
@@ -173,16 +110,6 @@ if __name__ == "__main__":
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         train_dataset = prepare_dataset(train_dataset, tokenizer)
-    """
-        if eval_dataset is not None:
-            eval_dataset = prepare_dataset(eval_dataset, tokenizer)
-        # filtering
-        train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
-        if eval_dataset is not None:
-            eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
-
-    assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
-    """
 
     ################
     # Training
@@ -193,13 +120,8 @@ if __name__ == "__main__":
         model=policy,
         ref_model=ref_policy,
         train_dataset=train_dataset,
-        peft_config=peft_config,
     )
     trainer.train()
 
-    # Save and push to hub
-    trainer.save_model(training_args.output_dir)
-    if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    # trainer.generate_completions()
+    # Save
+    # trainer.save_model(training_args.output_dir)
