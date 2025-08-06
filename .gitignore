@@ -2,4 +2,5 @@
 /AIXueTrainer/__pycache__/
 /data/*
 !/data/train.json
+!/data/aixue_test_data/
 /wandb/
