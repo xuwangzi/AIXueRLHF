@@ -92,7 +92,7 @@ if __name__ == "__main__":
                 text,
                 padding=False,
             )
-            text = element["response"] + "<|im_end|>"
+            text = element["response"] + tokenizer.eos_token
             response_ids = tokenizer.encode(
                 text,
                 padding=False,
