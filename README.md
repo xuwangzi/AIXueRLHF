@@ -25,7 +25,7 @@ cd AIXueRLHF
 sh ./scripts/train_example.sh
 ```
 
-The example dataset is ./data/aixue_test_data with 480 $\langle \text{prompt}, \text{response}, \text{reward} \rangle$s.
+The example dataset is ./data/aixue_test_data with 480 $\langle \text{prompt}, \text{response}, \text{reward} \rangle$ pairs.
 
 You can find the trained model and the logged tensorboard in "your_output_dir".
 
