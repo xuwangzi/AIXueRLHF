@@ -2,6 +2,9 @@
 
 A variant of PPO to learn from $\langle s, a, r \rangle$ tuples.
 
+[👉 PPO算法与AIXue算法代码实现对比分析](./PPO算法与AIXue算法代码实现对比分析.md)
+
+
 ## Description
 
 This project implements a variant of Proximal Policy Optimization (PPO) algorithm for reinforcement learning from human feedback (RLHF).

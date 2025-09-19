@@ -1,4 +1,4 @@
-我将仔细对比这两个文件，分析AIXue Trainer相对于PPO Trainer的修改之处。
+# PPO算法与AIXue算法代码实现对比分析
 
 ## 导入部分的差异
 
